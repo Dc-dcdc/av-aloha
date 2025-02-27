@@ -203,6 +203,37 @@ python lerobot/lerobot/scripts/eval.py \
         --num_episodes 50
     ```
 
+## Simulation Datasets
+
+#### Insert Peg
+- **3 Arms:** [Dataset](https://huggingface.co/datasets/iantc104/gv_sim_insert_peg_3arms) | [Visualization](https://huggingface.co/spaces/lerobot/visualize_dataset_v1.6?dataset=iantc104%2Fgv_sim_insert_peg_3arms&episode=0)  
+- **2 Arms:** [Dataset](https://huggingface.co/datasets/iantc104/gv_sim_insert_peg_2arms) | [Visualization](https://huggingface.co/spaces/lerobot/visualize_dataset_v1.6?dataset=iantc104%2Fgv_sim_insert_peg_2arms&episode=0)  
+
+#### Slot Insertion
+- **3 Arms:** [Dataset](https://huggingface.co/datasets/iantc104/gv_sim_slot_insertion_3arms) | [Visualization](https://huggingface.co/spaces/lerobot/visualize_dataset_v1.6?dataset=iantc104%2Fgv_sim_slot_insertion_3arms&episode=0)  
+- **2 Arms:** [Dataset](https://huggingface.co/datasets/iantc104/gv_sim_slot_insertion_2arms) | [Visualization](https://huggingface.co/spaces/lerobot/visualize_dataset_v1.6?dataset=iantc104%2Fgv_sim_slot_insertion_2arms&episode=0)  
+
+#### Sew Needle
+- **3 Arms:** [Dataset](https://huggingface.co/datasets/iantc104/gv_sim_sew_needle_3arms) | [Visualization](https://huggingface.co/spaces/lerobot/visualize_dataset_v1.6?dataset=iantc104%2Fgv_sim_sew_needle_3arms&episode=0)  
+- **2 Arms:** [Dataset](https://huggingface.co/datasets/iantc104/gv_sim_sew_needle_2arms) | [Visualization](https://huggingface.co/spaces/lerobot/visualize_dataset_v1.6?dataset=iantc104%2Fgv_sim_sew_needle_2arms&episode=0)  
+
+#### Hook Package
+- **3 Arms:** [Dataset](https://huggingface.co/datasets/iantc104/gv_sim_hook_package_3arms) | [Visualization](https://huggingface.co/spaces/lerobot/visualize_dataset_v1.6?dataset=iantc104%2Fgv_sim_hook_package_3arms&episode=0)  
+- **2 Arms:** [Dataset](https://huggingface.co/datasets/iantc104/gv_sim_hook_package_2arms) | [Visualization](https://huggingface.co/spaces/lerobot/visualize_dataset_v1.6?dataset=iantc104%2Fgv_sim_hook_package_2arms&episode=0)  
+
+#### Tube Transfer
+- **3 Arms:** [Dataset](https://huggingface.co/datasets/iantc104/gv_sim_tube_transfer_3arms) | [Visualization](https://huggingface.co/spaces/lerobot/visualize_dataset_v1.6?dataset=iantc104%2Fgv_sim_tube_transfer_3arms&episode=0)  
+- **2 Arms:** [Dataset](https://huggingface.co/datasets/iantc104/gv_sim_tube_transfer_2arms) | [Visualization](https://huggingface.co/spaces/lerobot/visualize_dataset_v1.6?dataset=iantc104%2Fgv_sim_tube_transfer_2arms&episode=0)  
+
+## Real-World Datasets
+
+#### Occluded Insertion
+- **Real-World:** [Dataset](https://huggingface.co/datasets/iantc104/gv_real_occluded_key_insertion) | [Visualization](https://huggingface.co/spaces/lerobot/visualize_dataset_v1.6?dataset=iantc104%2Fgv_real_occluded_key_insertion&episode=0)  
+
+#### Open Box  
+⚠ **Note:** This dataset is in a different format as it uses a newer version of the robot.  
+- **Real-World:** [Dataset](https://huggingface.co/datasets/iantc104/gaze_real_open_box_v1) | [Visualization](https://huggingface.co/spaces/lerobot/visualize_dataset_v1.6?dataset=iantc104%2Fgaze_real_open_box_v1&episode=0)  
+
 ## Citation
 
 ```
