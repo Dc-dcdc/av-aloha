@@ -18,6 +18,11 @@ from headset_utils import HeadsetData, HeadsetFeedback, convert_left_to_right_co
 import os
 import threading
 import cv2
+import multiprocessing
+import numpy as np
+from multiprocessing import shared_memory
+from headset_utils import HeadsetFeedback
+
 
 def force_codec(pc, sender, forced_codec):
     kind = forced_codec.split("/")[0]
@@ -103,7 +108,7 @@ class WebRTCHeadset:
             configuration=RTCConfiguration([
                 RTCIceServer("stun:stun1.l.google.com:19302"),
                 RTCIceServer("stun:stun2.l.google.com:19302"),
-                RTCIceServer(self.turn_server_url, self.turn_server_username, self.turn_server_password)
+                # RTCIceServer(self.turn_server_url, self.turn_server_username, self.turn_server_password)
             ])
         )
 
@@ -309,7 +314,7 @@ class WebRTCHeadset:
             configuration=RTCConfiguration([
                 RTCIceServer("stun:stun1.l.google.com:19302"),
                 RTCIceServer("stun:stun2.l.google.com:19302"),
-                RTCIceServer(self.turn_server_url, self.turn_server_username, self.turn_server_password)
+                # RTCIceServer(self.turn_server_url, self.turn_server_username, self.turn_server_password)
             ])
         )
 
@@ -332,11 +337,82 @@ class WebRTCHeadset:
             self.event_loop.stop()
             self.thread.join()
 
-if __name__ == "__main__":
+
+
+def headset_loop (shared_mem1, shared_mem2, some_other_feedback_multiproc_datatype, another_data_receive_data):
     try:
         headset = WebRTCHeadset()
         headset.run_in_thread()
-        
+
+        shm_left = shared_memory.SharedMemory(name=shm_left_name)
+        shm_right = shared_memory.SharedMemory(name=shm_right_name)
+
+        left_frame = np.ndarray(frame_shape, dtype=frame_dtype, buffer=shm_left.buf)
+        right_frame = np.ndarray(frame_shape, dtype=frame_dtype, buffer=shm_right.buf)
+
+        while True:
+            data = headset.receive_data()
+            if data is not None:
+                data_queue.put(data)
+                print(f"Received data: {data.h_pos}, {data.h_quat}")
+
+            if not feedback_queue.empty():
+                feedback = feedback_queue.get()
+                headset.send_feedback(feedback)
+
+            headset.send_images(left_frame.copy(), right_frame.copy())
+    except KeyboardInterrupt:
+        print("Shutting down headset loop...")
+
+class Headset:
+    def __init__(self, frame_shape=(480, 640, 3), frame_dtype=np.uint8):
+        self.frame_shape = frame_shape
+        self.frame_dtype = frame_dtype
+
+        self.shm_left = shared_memory.SharedMemory(create=True,
+                                                   size=np.prod(frame_shape) * np.dtype(frame_dtype).itemsize,
+                                                   name="shm_left")
+        self.shm_right = shared_memory.SharedMemory(create=True,
+                                                    size=np.prod(frame_shape) * np.dtype(frame_dtype).itemsize,
+                                                    name="shm_right")
+
+        self.feedback_queue = multiprocessing.Queue()
+        self.data_queue = multiprocessing.Queue()
+
+        self.process = multiprocessing.Process(target=headset_loop, args=(
+            self.shm_left.name,
+            self.shm_right.name,
+            frame_shape,
+            frame_dtype,
+            self.feedback_queue,
+            self.data_queue
+        ))
+        self.process.start()
+
+    def send_feedback(self, feedback: HeadsetFeedback):
+        self.feedback_queue.put(feedback)
+
+    def receive_data(self):
+        if not self.data_queue.empty():
+            return self.data_queue.get()
+        return None
+
+    def update_frames(self, left_frame: np.ndarray, right_frame: np.ndarray):
+        np.copyto(np.ndarray(self.frame_shape, dtype=self.frame_dtype, buffer=self.shm_left.buf), left_frame)
+        np.copyto(np.ndarray(self.frame_shape, dtype=self.frame_dtype, buffer=self.shm_right.buf), right_frame)
+
+    def close(self):
+        self.process.terminate()
+        self.shm_left.close()
+        self.shm_right.close()
+        self.shm_left.unlink()
+        self.shm_right.unlink()
+
+
+if __name__ == "__main__":
+    try:
+        headset = Headset()
+
         while True:
             data = headset.receive_data()
             if data is not None:
@@ -346,8 +422,10 @@ if __name__ == "__main__":
             feedback.info = f"Hello from python: {time.time()}"
             headset.send_feedback(feedback)
 
-            headset.send_image(np.random.randint(0, 255, (480, 640, 3), dtype=np.uint8))
+            left_img = np.random.randint(0, 255, (480, 640, 3), dtype=np.uint8)
+            right_img = np.random.randint(0, 255, (480, 640, 3), dtype=np.uint8)
+            headset.update_frames(left_img, right_img)
 
     except KeyboardInterrupt:
         print("Shutting down...")
-        os._exit(42)
+        headset.close()
