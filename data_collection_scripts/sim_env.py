@@ -5,7 +5,7 @@ from dm_control import mjcf
 import gymnasium as gym
 from gymnasium import spaces
 from constants import (
-    XML_DIR, 
+    XML_DIR,  #src/av-aloha/data_collection_scripts/assets
     SIM_DT, SIM_PHYSICS_DT, SIM_PHYSICS_ENV_STEP_RATIO,
     LEFT_ARM_POSE, RIGHT_ARM_POSE, MIDDLE_ARM_POSE,
     LEFT_JOINT_NAMES, RIGHT_JOINT_NAMES, MIDDLE_JOINT_NAMES,
@@ -21,6 +21,7 @@ from transform_utils import xyzw_to_wxyz, mat2pose, pose2mat, wxyz_to_xyzw
 
 CAMERAS = ['zed_cam', 'cam_left_wrist', 'cam_right_wrist', 'cam_high', 'cam_low']
 
+#根据任务名称创建仿真环境，仿真环境会返回指定相机的图像数据
 def make_sim_env(task_name, cameras=CAMERAS):
     if 'sim_insert_peg' in task_name:
         return InsertPegEnv(cameras=cameras)
@@ -344,19 +345,19 @@ class InsertPegEnv(GuidedVisionEnv):
         xml = os.path.join(XML_DIR, 'task_insert_peg.xml')
         super().__init__(xml, cameras)
 
-        self.max_reward = 4
+        self.max_reward = 4 
 
-        self._peg_joint = self._mjcf_root.find('joint', 'peg_joint')
-        self._hole_joint = self._mjcf_root.find('joint', 'hole_joint')
+        self._peg_joint = self._mjcf_root.find('joint', 'peg_joint') #在MJCF模型中找到名为'peg_joint'的关节，并将其保存在self._peg_joint中，方便后续操作
+        self._hole_joint = self._mjcf_root.find('joint', 'hole_joint') #在MJCF模型中找到名为'hole_joint'的关节，并将其保存在self._hole_joint中，方便后续操作
 
     def get_reward(self):
 
-        touch_left_gripper = False
-        touch_right_gripper = False
-        peg_touch_table = False
-        hole_touch_table = False
-        peg_touch_hole = False
-        pin_touched = False
+        touch_left_gripper = False #左侧夹持器接触
+        touch_right_gripper = False #右侧夹持器接触
+        peg_touch_table = False #插销接触桌子
+        hole_touch_table = False #孔接触桌子
+        peg_touch_hole = False #插销接触孔
+        pin_touched = False #插销接触销钉
 
         # return whether peg touches the pin
         contact_pairs = []
@@ -368,8 +369,8 @@ class InsertPegEnv(GuidedVisionEnv):
             contact_pairs.append((geom1, geom2))
             contact_pairs.append((geom2, geom1))
 
-        for geom1, geom2 in contact_pairs:
-            if geom1 == "peg" and geom2.startswith("right"):
+        for geom1, geom2 in contact_pairs: #遍历所有接触对，检查是否满足特定的接触条件，以确定当前的奖励等级
+            if geom1 == "peg" and geom2.startswith("right"): 
                 touch_right_gripper = True
             
             if geom1.startswith("hole-") and geom2.startswith("left"): 
@@ -378,13 +379,13 @@ class InsertPegEnv(GuidedVisionEnv):
             if geom1 == "table" and geom2 == "peg":
                 peg_touch_table = True
 
-            if geom1 == "table" and geom2.startswith("hole-"):
+            if geom1 == "table" and geom2.startswith("hole-"): #如果接触对中一个是"table"（桌子）另一个是以"hole-"开头的字符串（表示孔），则将hole_touch_table设置为True，表示孔已经成功接触到桌子。
                 hole_touch_table = True
 
-            if geom1 == "peg" and geom2.startswith("hole-"):
+            if geom1 == "peg" and geom2.startswith("hole-"): #如果接触对中一个是"peg"（插销）另一个是以"hole-"开头的字符串（表示孔），则将peg_touch_hole设置为True，表示插销已经成功接触到孔，这通常是任务完成的关键条件之一。
                 peg_touch_hole = True
 
-            if geom1 == "peg" and geom2 == "pin":
+            if geom1 == "peg" and geom2 == "pin": #如果接触对中一个是"peg"（插销）另一个是"pin"（销钉），则将pin_touched设置为True，表示插销已经成功接触到销钉，这通常是任务完成的关键条件之一。
                 pin_touched = True
 
         reward = 0
@@ -398,17 +399,20 @@ class InsertPegEnv(GuidedVisionEnv):
             reward = 4
         return reward
 
+    #
     def reset(self, seed=None) -> tuple:
         super().reset(seed=seed)
 
-        # reset physics
-        x_range = [0.1, 0.2]
-        y_range = [-0.1, 0.1]
-        z_range = [0.01, 0.01]
-        ranges = np.vstack([x_range, y_range, z_range])
-        peg_position = np.random.uniform(ranges[:, 0], ranges[:, 1])
-        peg_quat = np.array([1, 0, 0, 0])
+        # reset physics 
+        # 插销的位置
+        x_range = [0.1, 0.2] #插销在x轴上的随机范围
+        y_range = [-0.1, 0.1] #插销在y轴上的随机范围
+        z_range = [0.01, 0.01] #插销在z轴上的随机范围
+        ranges = np.vstack([x_range, y_range, z_range]) #将x_range、y_range和z_range堆叠成一个3行2列的数组，每行对应一个轴的范围，第一列是最小值，第二列是最大值
+        peg_position = np.random.uniform(ranges[:, 0], ranges[:, 1]) #在每个轴的指定范围内随机生成一个位置，ranges[:, 0]表示每个轴的最小值，ranges[:, 1]表示每个轴的最大值，生成的peg_position是一个包含x、y、z坐标的数组，表示插销的初始位置
+        peg_quat = np.array([1, 0, 0, 0]) #插销的初始姿态，使用四元数表示，这里表示没有旋转，即插销的坐标轴与世界坐标轴对齐
 
+        #孔的位置
         x_range = [-0.1, -0.2]
         y_range = [-0.1, 0.1]
         z_range = [0.021, 0.021]
@@ -416,8 +420,8 @@ class InsertPegEnv(GuidedVisionEnv):
         hole_position = np.random.uniform(ranges[:, 0], ranges[:, 1])
         hole_quat = np.array([1, 0, 0, 0])
 
-        self._physics.bind(self._peg_joint).qpos = np.concatenate([peg_position, peg_quat])
-        self._physics.bind(self._hole_joint).qpos = np.concatenate([hole_position, hole_quat])
+        self._physics.bind(self._peg_joint).qpos = np.concatenate([peg_position, peg_quat]) #将随机生成的peg位置和姿态拼接，并设置到物理引擎中对应的peg关节上，初始化peg的位置和姿态
+        self._physics.bind(self._hole_joint).qpos = np.concatenate([hole_position, hole_quat]) #将随机生成的hole位置和姿态拼接，并设置到物理引擎中对应的hole关节上，初始化hole的位置和姿态
 
         self._physics.forward()
 
@@ -425,7 +429,7 @@ class InsertPegEnv(GuidedVisionEnv):
         observation = self.get_obs()
         info = "Resetting arms..."
 
-        return observation, info
+        return observation, info #返回初始观察和信息字符串
     
 class SlotInsertionEnv(GuidedVisionEnv):
     def __init__(self, cameras):

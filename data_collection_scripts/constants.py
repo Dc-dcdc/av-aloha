@@ -1,30 +1,35 @@
+"""集中管理整个项目中不变的全局变量"""
 import pathlib
 import os
 # task parameters
-XML_PATH = os.path.join(pathlib.Path(__file__).parent.resolve(), 'assets', 'aloha.xml') # note: absolute paths
-XML_DIR = str(pathlib.Path(__file__).parent.resolve()) + '/assets'
-DATA_DIR = str(pathlib.Path(__file__).parent.resolve()) + '/data'
+#获取当前运行文件所在文件夹的绝对路径
+XML_PATH = os.path.join(pathlib.Path(__file__).parent.resolve(), 'assets', 'aloha.xml') #/脚本所在目录/assets/aloha.xml
+XML_DIR = str(pathlib.Path(__file__).parent.resolve()) + '/assets' #/脚本所在目录/assets
+DATA_DIR = str(pathlib.Path(__file__).parent.resolve()) + '/data'  #/脚本所在目录/data
+
 TASK_CONFIGS = {
+    #遮挡插入任务
     'occluded_insertion': {
         'dataset_dir': DATA_DIR + '/occluded_insertion',
         'num_episodes': 50,
         'episode_len': 600,
         'camera_names': [
-            "zed_cam_left",
-            "zed_cam_right",
-            "wrist_cam_left",
-            "wrist_cam_right",
-            "overhead_cam",
-            "worms_eye_cam",
+            "zed_cam_left",   # zed相机左视角
+            "zed_cam_right",  # zed相机右视角
+            "wrist_cam_left", # 左腕相机
+            "wrist_cam_right",# 右腕相机
+            "overhead_cam",   # 顶视相机
+            "worms_eye_cam",  # 底部仰视相机
         ]
     },
 }
+#仿真字典配置，每个任务包含数据集目录、轨迹数量、轨迹长度和相机名称列表等信息
 SIM_TASK_CONFIGS = {
     'sim_insert_peg': {
-        'dataset_dir': DATA_DIR + '/sim_insert_peg/3arms',
-        'num_episodes': 50,
-        'episode_len': 400,
-        'camera_names': ['zed_cam'],
+        'dataset_dir': DATA_DIR + '/sim_insert_peg/3arms',  #数据集目录
+        'num_episodes': 50, #轨迹数量
+        'episode_len': 400, #轨迹长度
+        'camera_names': ['zed_cam'], #相机名称列表
     },
     '2arms_sim_insert_peg': {
         'dataset_dir': DATA_DIR + '/sim_insert_peg/2arms',

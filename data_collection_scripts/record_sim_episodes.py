@@ -16,9 +16,11 @@ def send_popup_message(headset, message, duration=3.0):
     feedback.info = message
     headset.send_feedback(feedback)
     time.sleep(duration)
-    
+
+# 初始化环境并执行一步，以确保环境和头戴设备的状态同步
 def init_step(env):
     ts, info = env.reset()
+    # 将初始观测中的左右臂和中间臂的位姿拼接成一个动作向量，并在每个臂的末尾添加一个0.0，表示夹持器的状态（0.0表示未夹持），然后执行这个动作以确保环境和头戴设备的状态同步
     action = np.concatenate([
         ts['poses']['left'],
         np.array([0.0]),
@@ -28,36 +30,39 @@ def init_step(env):
     ])
     env.step(action)
 
+#重置环境并发送反馈给头戴设备，提示用户环境正在重置
 def reset_env(env, headset):
     print("Resetting the environment...")
      # reset the environment
-    feedback = HeadsetFeedback()
-    feedback.info = "Resetting the environment..."
-    headset.send_feedback(feedback)
-    ts, info = env.reset()
-    return ts
+    feedback = HeadsetFeedback() #创建一个HeadsetFeedback对象，用于向头戴设备发送反馈信息
+    feedback.info = "Resetting the environment..." #设置反馈信息，提示用户环境正在重置
+    headset.send_feedback(feedback) #将反馈信息发送到头戴设备
+    ts, info = env.reset() #重置环境，获取初始观测和信息
+    return ts #返回初始观测
 
+# 执行一个轨迹，返回轨迹回放数据、动作回放数据和一个布尔值表示轨迹是否成功完成，如果轨迹未成功完成（例如用户中途终止），则继续下一次循环等待用户开始下一个轨迹
 def run_episode(env, headset, episode_len, episode_idx):
-    headset_control = HeadsetControl()
-    feedback = HeadsetFeedback()
-    headset_control.reset()
-    action = np.zeros(23)
+    headset_control = HeadsetControl() #创建HeadsetControl对象，处理来自头戴设备的数据并生成控制命令和反馈
+    feedback = HeadsetFeedback() #创建一个HeadsetFeedback对象，用于向头戴设备发送反馈信息
+    headset_control.reset() #重置头戴设备控制器的状态，以准备开始一个新的轨迹
+    action = np.zeros(23) #初始化一个全零的动作向量
 
     # wait for user to start the episode
     print("Waiting for user to start the episode...")
     while True:
         start_time = time.time()
         
-        ts = env.get_obs()
+        ts = env.get_obs() # 获取当前环境的观测，包括左右臂和中间臂的位姿，以及相机图像等信息
 
         headset_data = headset.receive_data()
         if headset_data is not None:
             # get the action and feedback from the headset control
+            # 输入头戴设备的数据和环境中左右臂和中间臂的位姿，获取用户的控制命令（动作）和反馈信息（例如对齐状态、同步状态等）
             action, feedback = headset_control.run(
-                headset_data, 
-                ts['poses']['left'], 
-                ts['poses']['right'], 
-                ts['poses']['middle']
+                headset_data,  #头戴设备数据
+                ts['poses']['left'], #环境中左臂的位姿 
+                ts['poses']['right'],  #环境中右臂的位姿
+                ts['poses']['middle']   #环境中中间臂的位姿
             )
             # break if the user holds the right button
             if headset_data.r_button_one == True and feedback.head_out_of_sync == False and \
@@ -212,40 +217,42 @@ def save_episode(headset, episode_replay, action_replay, camera_names, dataset_d
     return True
 
 def collect_data(args):
-    dataset_dir = SIM_TASK_CONFIGS[args["task_name"]]["dataset_dir"]
-    num_episodes = SIM_TASK_CONFIGS[args["task_name"]]["num_episodes"]
-    episode_len = SIM_TASK_CONFIGS[args["task_name"]]["episode_len"]
-    camera_names = SIM_TASK_CONFIGS[args["task_name"]]["camera_names"]
-    record_video = args["record_video"]
-    start_episode_idx = args["episode_idx"]
+    dataset_dir = SIM_TASK_CONFIGS[args["task_name"]]["dataset_dir"] #数据集目录，../data_collection_scripts/data/(task_name决定)
+    num_episodes = SIM_TASK_CONFIGS[args["task_name"]]["num_episodes"] #轨迹数量，50
+    episode_len = SIM_TASK_CONFIGS[args["task_name"]]["episode_len"]  #轨迹长度
+    camera_names = SIM_TASK_CONFIGS[args["task_name"]]["camera_names"] #使用的相机名称列表
+    record_video = args["record_video"]  #是否记录视频
+    start_episode_idx = args["episode_idx"] #轨迹索引，即从第几条轨迹开始录制
 
-    #TODO
-    record_video = False
+    # TODO
+    # record_video = False # 目前视频录制功能不完善，先默认关闭，后续完善后再开放
 
     # create the dataset directory if it does not exist
-    if not os.path.isdir(dataset_dir):
-        os.makedirs(dataset_dir, exist_ok=True)
+    if not os.path.isdir(dataset_dir): #如果数据集目录不存在
+        os.makedirs(dataset_dir, exist_ok=True) #创建数据集目录
 
     # setup the headset control
-    headset = WebRTCHeadset()
-    headset.run_in_thread()
-    headset_control = HeadsetControl()
+    # 设置头戴设备控制
+    headset = WebRTCHeadset() #创建WebRTCHeadset对象，连接到头戴设备
+    headset.run_in_thread() #在一个单独的线程中运行头戴设备的通信循环，以便它可以同时接收数据和发送反馈
+    headset_control = HeadsetControl() #创建HeadsetControl对象，处理来自头戴设备的数据并生成控制命令和反馈
 
     # setup the environment
     if record_video:
         print("Recording video is enabled.")
-        env = make_sim_env(args["task_name"], cameras=camera_names)
+        env = make_sim_env(args["task_name"], cameras=camera_names) #根据任务名称和相机名称列表创建仿真环境
     else:
         print("Recording video is disabled.")
         env = make_sim_env(args["task_name"], cameras=['zed_cam'])
     
-    init_step(env)
+    init_step(env) #初始化环境并执行一步，以确保环境和头戴设备的状态同步
 
-    episode_idx = start_episode_idx
+    episode_idx = start_episode_idx #从指定的轨迹索引开始录制数据
     while episode_idx < num_episodes:
-        reset_env(env, headset)
+        reset_env(env, headset) #重置环境并发送反馈给头戴设备，提示用户环境正在重置
 
         # run the episode
+        # 执行一个轨迹，返回轨迹回放数据、动作回放数据和一个布尔值表示轨迹是否成功完成，如果轨迹未成功完成（例如用户中途终止），则继续下一次循环等待用户开始下一个轨迹
         episode_replay, action_replay, ok = run_episode(env, headset, episode_len, episode_idx)
 
         if not ok:
@@ -266,20 +273,22 @@ def collect_data(args):
         if not ok:
             continue
 
-        episode_idx += 1        
-
-
+        episode_idx += 1
+'''
+录制第 0 个视频，命令行输入：
+python collect_data.py --task_name sim_tube_transfer_3arms --episode_idx 0 
+'''
 if __name__ == "__main__":
     # Parse arguments
-    parser = argparse.ArgumentParser(description="Headset control")
-    parser.add_argument("--task_name", type=str, required=True)
-    parser.add_argument("--episode_idx", type=int, required=True)
-    parser.add_argument("--record_video", type=bool, default=True)
+    parser = argparse.ArgumentParser(description="Headset control") #创建一个ArgumentParser对象，用于从命令行解析参数
+    parser.add_argument("--task_name", type=str, required=True)  #任务名称
+    parser.add_argument("--episode_idx", type=int, required=True) #轨迹索引
+    parser.add_argument("--record_video", type=bool, default=False) #是否记录视频
     args = parser.parse_args()
     args = vars(args)
 
     try:
         collect_data(args)
-    except KeyboardInterrupt:
+    except KeyboardInterrupt: # 捕获键盘中断 ctrl+c
         print("Shutting down...")
-        os._exit(42)
+        os._exit(42) # 退出程序

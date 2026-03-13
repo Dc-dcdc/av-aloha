@@ -200,6 +200,7 @@ def within_pose_threshold(current_xpos, current_xmat, target_xpos, target_xmat, 
 
     return pos_err < position_threshold and rot_err < rotation_threshold
 
+# 将当前位姿从当前坐标系转换到目标坐标系
 @jit(float64[:,:](float64[:,:],float64[:,:],float64[:,:]), nopython=True, fastmath=True, cache=True)
 def transform_coordinates(current_pose, current_frame, target_frame):
     current_frame = np.ascontiguousarray(current_frame)
