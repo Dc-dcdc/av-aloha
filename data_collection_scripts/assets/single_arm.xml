@@ -4,7 +4,10 @@
   <option noslip_iterations="3" cone="elliptic" impratio="100">
   <flag multiccd="enable"/>
   </option> 
-
+  <!-- 设置全局渲染参数，渲染请求的上限，如camera的分辨率 -->
+  <visual>
+    <global offwidth="1280" offheight="1280"/>
+  </visual>
   <asset>
     <material name="black" rgba="0.15 0.15 0.15 1"/>
 
@@ -206,7 +209,8 @@
     </body>
   </worldbody>
 
-  <contact>
+
+  <contact> 
     <exclude body1="middle_base_link" body2="middle_shoulder_link"/>
   </contact>
 

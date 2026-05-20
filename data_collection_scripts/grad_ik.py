@@ -10,7 +10,7 @@ def run_grad_ik(
     q_start,
     target_pos,
     target_quat,
-    fk_fn,
+    fk_fn, # 正向运动学计算函数
     cost_fn,
     solution_fn,
     max_iterations,
@@ -23,11 +23,12 @@ def run_grad_ik(
 ):    
     
     # fk to get current pose
-    current_pose = fk_fn(q_start)
+    current_pose = fk_fn(q_start) # 输入角度，获取位姿
     current_xpos = current_pose[:3, 3]
     current_xmat = current_pose[:3, :3]
 
     # limit target pose
+    # 对目标位姿进行安全限幅
     target_xpos = target_pos
     target_xmat = quat2mat(wxyz_to_xyzw(target_quat))
     target_pos, target_xmat = limit_pose(
@@ -37,9 +38,9 @@ def run_grad_ik(
         target_xmat,
         max_pos_diff,
         max_rot_diff,
-    )
+    ) 
 
-    init_cost = cost_fn(q_start, q_start, target_pos, target_xmat)
+    init_cost = cost_fn(q_start, q_start, target_pos, target_xmat) #计算初始惩罚
     gradient = np.zeros(len(q_start))
     working = q_start.copy()
     local = q_start.copy()
@@ -47,36 +48,36 @@ def run_grad_ik(
     local_cost = init_cost
     best_cost = init_cost
     
-    previous_cost = 0.0
+    previous_cost = 0.0 # 
     for i in prange(max_iterations):
         count = len(local)
 
-        for i in prange(count):
+        for i in prange(count): #遍历每个关节
             working[i] = local[i] - step_size
-            p1 = cost_fn(working, q_start, target_pos, target_xmat)
-
+            p1 = cost_fn(working, q_start, target_pos, target_xmat) #往后退一步的惩罚值
+ 
             working[i] = local[i] + step_size
-            p3 = cost_fn(working, q_start, target_pos, target_xmat)
+            p3 = cost_fn(working, q_start, target_pos, target_xmat) #往前走一步的惩罚值
 
-            working[i] = local[i]
+            working[i] = local[i] #恢复原状
 
-            gradient[i] = p3 - p1
+            gradient[i] = p3 - p1 #计算梯度
 
         sum_gradients = np.sum(np.abs(gradient)) + step_size
-        f = step_size / sum_gradients
-        gradient *= f
+        f = step_size / sum_gradients #梯度归一化
+        gradient *= f #对梯度进行缩放
 
-        working = local - gradient
-        p1 = cost_fn(working, q_start, target_pos, target_xmat)
+        working = local - gradient 
+        p1 = cost_fn(working, q_start, target_pos, target_xmat) #顺着梯度走一步的惩罚值
 
         working = local + gradient
-        p3 = cost_fn(working, q_start, target_pos, target_xmat)
+        p3 = cost_fn(working, q_start, target_pos, target_xmat) #逆着梯度走一步的惩罚值
         p2 = 0.5 * (p1 + p3)
 
         cost_diff = 0.5 * (p3 - p1)
         joint_diff = p2 / cost_diff if np.isfinite(cost_diff) and cost_diff != 0.0 else 0.0
 
-        working = local - gradient * joint_diff
+        working = local - gradient * joint_diff # 真正迈出更新的这一步
         working = np.clip(working, joint_limits[:, 0], joint_limits[:, 1])
 
         local[:] = working
@@ -86,10 +87,10 @@ def run_grad_ik(
             best[:] = local
             best_cost = local_cost
 
-        if solution_fn(local, q_start, target_pos, target_xmat):
+        if solution_fn(local, q_start, target_pos, target_xmat): #达标直接结束
             break
 
-        if abs(local_cost - previous_cost) <= min_cost_delta:
+        if abs(local_cost - previous_cost) <= min_cost_delta:  #误差过小，直接结束
             break
 
         previous_cost = local_cost
@@ -98,32 +99,32 @@ def run_grad_ik(
 
     return new_q
 
-
+# 梯度下降逆解法，抛弃了雅可比矩阵，把求逆解变成了一个“求函数最小值”的最优化问题
 class GradIK():
     def __init__(
         self, 
-        physics, 
-        joints,
-        actuators,
-        eef_site,
-        step_size=0.0001, 
-        min_cost_delta=1.0e-12, 
-        max_iterations=50, 
-        position_weight=500.0,
-        rotation_weight=100.0,
-        joint_center_weight=np.array([10.0, 10.0, 1.0, 50.0, 1.0, 1.0]),
-        joint_displacement_weight=np.array(6*[50.0]),
-        position_threshold=0.001,
-        rotation_threshold=0.001,
-        max_pos_diff=0.1,
-        max_rot_diff=0.3,
-        joint_p = 0.1,
+        physics,  # mujoco引擎实例，包含机器人真实状态信息
+        joints, # 机器人关节列表
+        actuators, # 机器人执行器列表，对应于关节的控制输入
+        eef_site, # 末端执行器位姿
+        step_size=0.0001,  # 数值求导的微小扰动量 (Epsilon)。用于计算梯度：通过让关节极其微小地动一下，观察代价函数的变化趋势。
+        min_cost_delta=1.0e-12, # 早停机制 (Early Stopping) 阈值。如果代价函数下降幅度极小，说明已经到达谷底（或局部最优），提前结束循环以节省算力。
+        max_iterations=50, # 最大迭代次数
+        position_weight=500.0, # 末端位置误差惩罚权重（极高）。确保机器人优先满足 "到达指定 XYZ 坐标" 的主任务。
+        rotation_weight=100.0, # 末端姿态误差惩罚权重（较高）。确保末端的朝向正确。
+        joint_center_weight=np.array([10.0, 10.0, 1.0, 50.0, 1.0, 1.0]), 
+        joint_displacement_weight=np.array(6*[50.0]),# 最小位移权重（稳定任务）。惩罚大动作，鼓励用最小的关节变化量来完成任务，让动作显得连贯、不乱抽搐。
+        position_threshold=0.001, # 位置成功容错 (米)，小于则判定达标
+        rotation_threshold=0.001, # 姿态成功容错
+        max_pos_diff=0.1, # 单次位置改变上限
+        max_rot_diff=0.3, # 单次姿态改变上限
+        joint_p = 0.1,# 最终输出的低通滤波系数 (EMA)。计算出最优解后，只取 (目标-当前) 的 10%，让机器人的真实运动极其丝滑（类似于 P 控制器的增益）。
     ):
-        self.physics = physics
+        self.physics = physics # 
         self.joints = joints
         self.actuators = actuators
         self.eef_site = eef_site
-        self.fk_fn = create_fk_fn(physics, joints, eef_site)
+        self.fk_fn = create_fk_fn(physics, joints, eef_site) # # 返回正向运动学计算函数，可以输入关节角度，输出末端执行器的位姿矩阵
         
         self.step_size = step_size
         self.min_cost_delta = min_cost_delta
@@ -164,7 +165,7 @@ class GradIK():
             self.max_pos_diff,
             self.max_rot_diff,
         )
-
+    # 代价函数
     def make_cost_fn(self):
         fk_fn = self.fk_fn
         position_weight = self.position_weight
@@ -182,15 +183,19 @@ class GradIK():
             cost = 0.0
 
             # position cost
+            # 位置惩罚
             cost += (position_weight * np.linalg.norm(target_xpos - current_xpos))**2
 
             # rotation cost
+            #姿态惩罚
             cost += (rotation_weight * np.linalg.norm(angular_error(target_xmat, current_xmat)))**2
 
             # center joints cost
+            # 不影响抓取的前提下，把所有关节拉回最舒展、最居中的安全姿态。
             cost += np.sum( (joint_center_weight * (q - joint_centers)) ** 2 )
 
             # minimal displacement cost
+            # 最小位移惩罚
             cost += np.sum((joint_displacement_weight * (q - q_start))**2)
 
             return cost

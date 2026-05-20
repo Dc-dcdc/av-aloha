@@ -11,7 +11,7 @@ os.environ["http_proxy"] = "http://127.0.0.1:7897"
 os.environ["https_proxy"] = "http://127.0.0.1:7897"
 
 # 3. 填入你刚才测试成功的 Token
-MY_HF_TOKEN = "YOUR_HUGGINGFACE_TOKEN_HERE"
+MY_HF_TOKEN = "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"
 
 def push_model_folder_to_hf(local_dir, repo_id, commit_message="Upload model"):
     # 强制在代码层面登录
@@ -24,7 +24,7 @@ def push_model_folder_to_hf(local_dir, repo_id, commit_message="Upload model"):
     print(f"🎯 目标仓库: https://huggingface.co/{repo_id}")
     
     # 1. 创建仓库 (如果已存在则跳过)
-    api.create_repo(repo_id=repo_id, repo_type="model", exist_ok=True)
+    api.create_repo(repo_id=repo_id, repo_type="model", exist_ok=True)                                                                                                                                       
     
     # 2. 上传文件夹
     print("🚀 正在拼命上传中，这可能需要一点时间，请耐心等待...")

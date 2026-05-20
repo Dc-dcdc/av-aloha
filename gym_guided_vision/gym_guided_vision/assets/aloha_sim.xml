@@ -373,10 +373,22 @@
     <exclude body1="middle_base_link" body2="middle_shoulder_link"/>
   </contact>
 
+<!-- 让夹爪左右手指同步开合 -->
   <equality>
     <joint joint1="left_left_finger" joint2="left_right_finger" polycoef="0 1 0 0 0"/>
     <joint joint1="right_left_finger" joint2="right_right_finger" polycoef="0 1 0 0 0"/>
   </equality>
 
   <include file="joint_position_actuators.xml"/>
+  <keyframe>
+    <key name="neutral_pose" qpos="
+    0 -0.96 1.16 0 -0.3 0 0.0084 0.0084
+    0 -0.96 1.16 0 -0.3 0 0.0084 0.0084
+    0 -0.96 1.16 0 -0.3 0 0"
+      ctrl="
+    0 -0.96 1.16 0 -0.3 0 0.0084
+    0 -0.96 1.16 0 -0.3 0 0.0084
+    0 -0.96 1.16 0 -0.3 0 0"
+    />
+  </keyframe>
 </mujoco>

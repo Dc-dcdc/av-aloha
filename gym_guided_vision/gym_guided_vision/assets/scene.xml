@@ -8,8 +8,11 @@
   <visual>
     <headlight diffuse="0.6 0.6 0.6" ambient="0.3 0.3 0.3" specular="0 0 0"/>
     <rgba haze="0.15 0.25 0.35 1"/>
+    <!-- azimuth：方位角，绕Y轴旋转；elevation：仰角，绕X轴上下抬落。预留1280*1280的渲染缓冲区 -->
     <global azimuth="90" elevation="-20" offwidth="1280" offheight="1280"/>
+    <!-- MuJoCo 默认的阴影分辨率比较低，边缘会有锯齿（马赛克）。你把它拉到了 8192 (8K分辨率的阴影贴图) -->
     <quality shadowsize="8192"/>
+    <!-- 距离相机镜头 5 厘米（0.05米）以内的任何东西，都不要画出来，避免脏数据 -->
     <map znear="0.05"/>
   </visual>
 

@@ -164,6 +164,7 @@ def xyzw_to_wxyz(quat):
 def wxyz_to_xyzw(quat):
     return np.array([quat[1], quat[2], quat[3], quat[0]])
 
+# 
 @jit(float64[:,:](float64[:,:]), nopython=True, fastmath=True, cache=True)
 def align_rotation_to_z_axis(matrix):     
     # Get the current z-axis of the quaternion
@@ -231,7 +232,7 @@ def exp2rot(w, theta):
     return R
 
 @jit(nopython=True, fastmath=True, cache=True)
-def exp2mat(w, v, theta):
+def exp2mat(w, v, theta): 
     """Matrix exponential of rigid-body motions
     
     Convert exponential coordinates to transformation matrix
@@ -253,7 +254,7 @@ def exp2mat(w, v, theta):
     assert np.isclose(w_norm, 1), 'norm(w) must be 1'
     
     ss_w = skew_sym(w)
-    new_v = (np.eye(3)*theta + (1-np.cos(theta))*ss_w + (theta-np.sin(theta))*np.dot(ss_w, ss_w)).dot(v)
+    new_v = (np.eye(3)*theta + (1-np.cos(theta))*ss_w + (theta-np.sin(theta))*np.dot(ss_w, ss_w)).dot(v) 
     return np.vstack((
         np.hstack((
             exp2rot(w, theta), new_v[:,np.newaxis]

@@ -16,7 +16,7 @@ from tqdm import tqdm
 
 
 def main(args):
-    episode_path = args["episode_path"]
+    episode_path = args["episode_path"] 
     env = gym.make(args["env"]) 
 
     # Using tqdm to track progress over episodes

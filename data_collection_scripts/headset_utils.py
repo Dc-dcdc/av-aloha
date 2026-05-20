@@ -34,7 +34,7 @@ class HeadsetData:
     r_button_two = False #右手按钮二
     r_button_thumbstick = False #右手拇指按键
 
-# 定义一个类来存储头戴设备的反馈信息，包括各个部位是否不同步、反馈信息字符串以及左右臂和中间臂的位姿
+# 定义一个类来存储头戴设备的反馈信息，将信息发送给头戴设备
 class HeadsetFeedback:
     head_out_of_sync = False #表示头部是否不同步
     left_out_of_sync = False #表示左臂是否不同步

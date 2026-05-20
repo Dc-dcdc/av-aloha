@@ -28,7 +28,7 @@ SIM_TASK_CONFIGS = {
     'sim_insert_peg': {
         'dataset_dir': DATA_DIR + '/sim_insert_peg/3arms',  #数据集目录
         'num_episodes': 50, #轨迹数量
-        'episode_len': 400, #轨迹长度
+        'episode_len': 4000, #轨迹长度
         'camera_names': ['zed_cam'], #相机名称列表
     },
     '2arms_sim_insert_peg': {
@@ -64,18 +64,19 @@ SIM_TASK_CONFIGS = {
 }
 
 # control parameters
-REAL_DT = 0.02
+#上位机（主控电脑）每秒钟 50 次去读取 VR 头显和手柄的位姿（Pose），进行逆运动学（IK）解算，并将计算出的关节目标角度下发给真实的机械臂底层电机
+REAL_DT = 0.02 # 控制回路（发送指令给电机、读取传感器）的运行频率是 50 Hz
 
 # physics parameters
-SIM_PHYSICS_DT=0.002
-SIM_DT = 0.04
-SIM_PHYSICS_ENV_STEP_RATIO = int(SIM_DT/SIM_PHYSICS_DT)
-SIM_DT = SIM_PHYSICS_DT * SIM_PHYSICS_ENV_STEP_RATIO
+SIM_PHYSICS_DT=0.002 # 物理引擎（计算刚体动力学、碰撞、摩擦力等）每 0.002 秒（500 Hz）进行一次演算。
+SIM_DT = 0.04  #读取操作员动捕设备或AI算法输出的动作的频率：25HZ
+SIM_PHYSICS_ENV_STEP_RATIO = int(SIM_DT/SIM_PHYSICS_DT) #AI 每输出一个动作，仿真器会在底层保持这个动作不变，连续运行 20 次物理演算（每次 0.002 秒），然后再把第 20 次演算后的最新状态返回给 AI。
+SIM_DT = SIM_PHYSICS_DT * SIM_PHYSICS_ENV_STEP_RATIO # 强制确保最终的 SIM_DT 绝对是底层物理步长的整数倍，这样可以保证仿真器的稳定性
 
 # robot parameters
-LEFT_ARM_POSE = [0, -0.082, 1.06, 0, -0.953, 0, 0.02239]
-RIGHT_ARM_POSE = [0, -0.082, 1.06, 0, -0.953, 0, 0.02239]
-MIDDLE_ARM_POSE = [0, -0.8, 0.8, 0, 0.5, 0, 0]
+LEFT_ARM_POSE = [0, -0.082, 1.06, 0, -0.953, 0, 0.02239] #左臂初始姿态
+RIGHT_ARM_POSE = [0, -0.082, 1.06, 0, -0.953, 0, 0.02239] #右臂初始姿态
+MIDDLE_ARM_POSE = [0, -0.8, 0.8, 0, 0.5, 0, 0] #中臂初始姿态
 LEFT_JOINT_NAMES = [
     "left_waist",
     "left_shoulder",
@@ -83,7 +84,7 @@ LEFT_JOINT_NAMES = [
     "left_forearm_roll",
     "left_wrist_angle",
     "left_wrist_rotate",
-    "left_left_finger",
+    "left_left_finger", #夹爪的左指关节
 ]
 RIGHT_JOINT_NAMES = [
     "right_waist",
@@ -92,7 +93,7 @@ RIGHT_JOINT_NAMES = [
     "right_forearm_roll",
     "right_wrist_angle",
     "right_wrist_rotate",
-    "right_right_finger",
+    "right_right_finger", #夹爪的右指关节
 ]
 MIDDLE_JOINT_NAMES = [
     "middle_waist",

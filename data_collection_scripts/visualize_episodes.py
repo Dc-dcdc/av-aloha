@@ -31,19 +31,20 @@ def main(args):
         print(f'Invalid hdf5 file: {hdf5_path}')
         return
 
-    dataset_name = os.path.basename(hdf5_path).replace('.hdf5', '')
-    dataset_dir = os.path.dirname(hdf5_path)
+    dataset_name = os.path.basename(hdf5_path).replace('.hdf5', '') # # 提取纯文件名（如 'episode_0'）
+    dataset_dir = os.path.dirname(hdf5_path) # 提取父级目录路径（如 'data/sim_aloha'）
 
-    qpos, qvel, action, image_dict = load_hdf5(hdf5_path)
+    qpos, qvel, action, image_dict = load_hdf5(hdf5_path) # 加载数据
     
     # if dataset_dir starts with sim_, use SIM_DT, else use REAL_DT
+    # 判断仿真还是真实数据，使用不同的时间间隔
     DT = SIM_DT if dataset_dir.startswith('sim_') else REAL_DT
     
     save_videos(image_dict, DT, video_path=os.path.join(dataset_dir, dataset_name + '_video.mp4'))
     visualize_joints(qpos, action, plot_path=os.path.join(dataset_dir, dataset_name + '_qpos.png'))
     # visualize_timestamp(t_list, dataset_path) # TODO addn timestamp back
 
-
+# 将多个视频图像拼接成一个mp4文件
 def save_videos(video, dt, video_path=None):
     if isinstance(video, list):
         cam_names = list(video[0].keys())
@@ -96,7 +97,7 @@ def save_videos(video, dt, video_path=None):
         out.release()
         print(f'Saved video to: {video_path}')
 
-
+# 可视化关节 
 def visualize_joints(qpos_list, command_list, plot_path=None, ylim=None, label_overwrite=None):
     if label_overwrite:
         label1, label2 = label_overwrite
@@ -107,21 +108,22 @@ def visualize_joints(qpos_list, command_list, plot_path=None, ylim=None, label_o
     command = np.array(command_list)
     num_ts, num_dim = qpos.shape
     h, w = 2, num_dim
-    num_figs = num_dim
-    fig, axs = plt.subplots(num_figs, 1, figsize=(w, h * num_figs))
+    num_figs = num_dim # 一个图有多少个子图
+    #                     num_figs 行、1 列 宽度W，高度h * num_figs的子图布局
+    fig, axs = plt.subplots(num_figs, 1, figsize=(w, h * num_figs)) # 
 
     # plot joint state
     all_names = LEFT_JOINT_NAMES + RIGHT_JOINT_NAMES + MIDDLE_JOINT_NAMES
     for dim_idx in range(num_dim):
         ax = axs[dim_idx]
-        ax.plot(qpos[:, dim_idx], label=label1)
+        ax.plot(qpos[:, dim_idx], label=label1) # 实际位置
         ax.set_title(f'Joint {dim_idx}: {all_names[dim_idx]}')
         ax.legend()
 
     # plot arm command
     for dim_idx in range(num_dim):
         ax = axs[dim_idx]
-        ax.plot(command[:, dim_idx], label=label2)
+        ax.plot(command[:, dim_idx], label=label2) # 目标位置
         ax.legend()
 
     if ylim:
@@ -143,13 +145,14 @@ def visualize_timestamp(t_list, dataset_path):
     for secs, nsecs in t_list:
         t_float.append(secs + nsecs * 10E-10)
     t_float = np.array(t_float)
-
+ 
+    # 绘制了时间戳随着帧编号（timestep）的增长趋势，检查是否停滞和倒带
     ax = axs[0]
     ax.plot(np.arange(len(t_float)), t_float)
     ax.set_title(f'Camera frame timestamps')
     ax.set_xlabel('timestep')
     ax.set_ylabel('time (sec)')
-
+    # 绘制了相邻两帧之间的时间间隔，如果有凹凸，说明系统有卡顿
     ax = axs[1]
     ax.plot(np.arange(len(t_float)-1), t_float[:-1] - t_float[1:])
     ax.set_title(f'dt')
@@ -164,4 +167,5 @@ def visualize_timestamp(t_list, dataset_path):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--hdf5_path', action='store', type=str, help='Path to hdf5 file.', required=True)
+    # 将HDF5文件重新解包，合成带时间戳的多视角视频（.mp4）和关节运动曲线（.png）
     main(vars(parser.parse_args()))

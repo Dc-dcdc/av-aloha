@@ -54,7 +54,8 @@ def preprocess_observation(observations: dict[str, np.ndarray]) -> dict[str, Ten
             img = RESIZE(img)
 
             return_observations[imgkey] = img
-
+    
+    # 环境的物理参数
     if "environment_state" in observations:
         return_observations["observation.environment_state"] = torch.from_numpy(
             observations["environment_state"]

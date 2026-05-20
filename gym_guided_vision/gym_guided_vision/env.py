@@ -63,6 +63,17 @@ class GuidedVisionEnv(gym.Env):
         elif self.num_arms == 3:
             self.num_joints = 21
 
+
+
+        """
+        {
+        "pixels": {
+            "cam_1": Box(...),
+            "cam_2": Box(...)
+        },
+        "agent_pos": Box(...)
+        }
+        """
         self.observation_space = spaces.Dict(
             {
                 "pixels": spaces.Dict(
@@ -85,16 +96,20 @@ class GuidedVisionEnv(gym.Env):
             }
         )
         self.action_space = spaces.Box(low=-np.inf, high=np.inf, shape=(self.num_joints,), dtype=np.float32) 
-
+        # 在 Python 代码和底层的 MuJoCo XML 物理模型之间建立连接
+        # 绑定关节，用于读取关节角度
         self._left_joints = [self._mjcf_root.find('joint', name) for name in LEFT_JOINT_NAMES]
         self._right_joints = [self._mjcf_root.find('joint', name) for name in RIGHT_JOINT_NAMES]
         self._middle_joints = [self._mjcf_root.find('joint', name) for name in MIDDLE_JOINT_NAMES]
+        # 绑定动作，用于发送控制指令
         self._left_actuators = [self._mjcf_root.find('actuator', name) for name in LEFT_ACTUATOR_NAMES]
         self._right_actuators = [self._mjcf_root.find('actuator', name) for name in RIGHT_ACTUATOR_NAMES]
         self._middle_actuators = [self._mjcf_root.find('actuator', name) for name in MIDDLE_ACTUATOR_NAMES]
+        # 绑定末端执行器，用于读取末端执行器位姿
         self._left_eef_site = self._mjcf_root.find('site', LEFT_EEF_SITE)
         self._right_eef_site = self._mjcf_root.find('site', RIGHT_EEF_SITE)
         self._middle_eef_site = self._mjcf_root.find('site', MIDDLE_EEF_SITE)
+        # 绑定夹爪，用于读取夹爪角度
         self._left_gripper_joints = [self._mjcf_root.find('joint', name) for name in LEFT_GRIPPER_JOINT_NAMES]
         self._right_gripper_joints = [self._mjcf_root.find('joint', name) for name in RIGHT_GRIPPER_JOINT_NAMES]
         # self._left_fk_fn = create_fk_fn(self._physics, self._left_joints[:6], self._left_eef_site)
@@ -390,10 +405,10 @@ class GuidedVisionEnv(gym.Env):
                 key_callback=key_callback
             )
 
-
+    # 将中间臂隐藏（移出视角外）
     def hide_middle_arm(self):
         self._physics.bind(self._middle_base_link).pos = np.array([0, -2.4, -0.4]) # HACK
-
+    
     def show_middle_arm(self):
         self._physics.bind(self._middle_base_link).pos = self._middle_base_link_init_pos
 

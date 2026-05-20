@@ -4,52 +4,60 @@ import mujoco
 from transform_utils import exp2mat, adjoint, within_pose_threshold, pose2mat, wxyz_to_xyzw
 from numba import jit, prange
 
+# 基于PoE的正运动学，比自带的mujoco.mj_kinematics更快，且可以直接输出位姿矩阵，方便后续计算雅可比矩阵和差分逆运动学
 def create_fk_fn(physics, joints, eef_site):
-    physics.bind(joints).qpos = np.zeros(len(joints))
-    mujoco.mj_kinematics(physics.model.ptr, physics.data.ptr)
-    w0 = physics.bind(joints).xaxis.copy()
-    p0 = physics.bind(joints).xanchor.copy()
-    v0 = -np.cross(w0, p0)
-    site0 = np.eye(4)
-    site0[:3, :3] = physics.bind(eef_site).xmat.reshape(3,3).copy()
-    site0[:3, 3] = physics.bind(eef_site).xpos.copy()
-
-    @jit(nopython=True, fastmath=True, cache=False)
-    def forward_kinematics(theta):
+    physics.bind(joints).qpos = np.zeros(len(joints)) # 将关节位置设置为零，以计算初始位姿
+    mujoco.mj_kinematics(physics.model.ptr, physics.data.ptr) # 调用Mujoco的正运动学函数，计算末端执行器的位姿
+    w0 = physics.bind(joints).xaxis.copy() # 获取每个关节的旋转轴向量
+    p0 = physics.bind(joints).xanchor.copy() # 获取每个关节的锚点位置，可以理解为关节的旋转中心位置（在世界坐标系里的物理中心点）
+    v0 = -np.cross(w0, p0) # 计算每个关节的线速度分量，得到完整的螺旋轴表示
+    site0 = np.eye(4) # 4×4 的单位矩阵（对角线为 1，其余全 0），用于存储末端执行器的初始位姿（旋转矩阵和平移向量）
+    site0[:3, :3] = physics.bind(eef_site).xmat.reshape(3,3).copy() # 提取末端执行器的旋转矩阵
+    site0[:3, 3] = physics.bind(eef_site).xpos.copy() # 提取末端执行器的位置
+    '''
+    带有 @jit 的函数第一次被调用时，Numba 会启动编译器，把这段 Python 代码翻译成底层的 C/机器码，
+    之后的调用会直接使用编译好的机器码，极大提高运行速度
+    '''
+    @jit(nopython=True, fastmath=True, cache=False)  # 这是 Numba 里给函数加速的装饰器
+    def forward_kinematics(theta): # 输入关节角度，输出末端执行器的位姿矩阵
         M = np.eye(4)
         M[:,:] = site0
-        for i in prange(len(theta)-1, -1, -1):
-            T = exp2mat(w0[i], v0[i], theta[i])
-            M = np.dot(T, M)
+        for i in prange(len(theta)-1, -1, -1): 
+            T = exp2mat(w0[i], v0[i], theta[i]) # 计算每个关节的变换矩阵
+            M = np.dot(T, M) # 从末端执行器开始，依次右乘每个关节的变换矩阵，得到最终的位姿矩阵
         return M
     
-    return forward_kinematics
-
+    return forward_kinematics #返回编译的机器码函数，可以直接调用，速度非常快，输入关节角度，输出末端执行器的位姿矩阵
+# 雅可比矩阵的计算，基于PoE的正运动学实现，可以直接输出末端执行器在关节空间中的雅可比矩阵，方便后续计算差分逆运动学
 def create_jac_fn(physics, joints):
-    physics.bind(joints).qpos = np.zeros(len(joints))
-    mujoco.mj_kinematics(physics.model.ptr, physics.data.ptr)
-    w0 = physics.bind(joints).xaxis.copy()
-    p0 = physics.bind(joints).xanchor.copy()
-    v0 = -np.cross(w0, p0)
-
-    @jit(nopython=True, fastmath=True, cache=False)
-    def jacobian(theta):
+    physics.bind(joints).qpos = np.zeros(len(joints)) #设置关节角度为初始位置
+    mujoco.mj_kinematics(physics.model.ptr, physics.data.ptr) #计算此时末端执行器位姿
+    w0 = physics.bind(joints).xaxis.copy() # 各关节的旋转轴向量
+    p0 = physics.bind(joints).xanchor.copy() # 各关节的锚点位置（关节在世界坐标系里的物理中心点）
+    v0 = -np.cross(w0, p0) # 各关节的线速度分量
+    '''
+    带有 @jit 的函数第一次被调用时，Numba 会启动编译器，把这段 Python 代码翻译成底层的 C/机器码，
+    之后的调用会直接使用编译好的机器码，极大提高运行速度
+    '''
+    @jit(nopython=True, fastmath=True, cache=False) 
+    def jacobian(theta): # 输入关节角度，输出末端执行器在关节空间中的雅可比矩阵
         # screw axis at rest place
-        S = np.hstack((w0, v0)) 
-        J = np.zeros((6, len(theta)))
-        Ts = np.eye(4)
+        S = np.hstack((w0, v0)) # 每一行是一个关节的螺旋轴表示，前3列是旋转轴向量，后3列是线速度分量
+        J = np.zeros((6, len(theta))) # 6行，len(theta)列的零矩阵，用于存储雅可比矩阵，前3行对应位置雅可比，后3行对应旋转雅可比
+        Ts = np.eye(4) # 4×4 的单位矩阵，用于存储当前的变换矩阵
 
         # compute each column of the Jacobian
         for i in prange(len(theta)):
-            J[:, i] = adjoint(Ts) @ S[i,:]
-            Ts = np.dot(Ts, exp2mat(w0[i], v0[i], theta[i]))
+            
+            J[:, i] = adjoint(Ts) @ S[i,:] # PoE法计算雅可比矩阵的第i列
+            Ts = np.dot(Ts, exp2mat(w0[i], v0[i], theta[i])) # 从末端执行器开始，依次右乘每个关节的变换矩阵，得到当前的变换矩阵，然后计算雅可比矩阵的每一列
 
         # swap jacp and jacr
-        J = J[np.array((3,4,5,0,1,2)),:]
+        J = J[np.array((3,4,5,0,1,2)),:] # 将雅可比矩阵的前3行和后3行交换，[wx, wy, wz, vx, vy, vz] -> [vx, vy, vz, wx, wy, wz]
 
         return J
     
-    return jacobian
+    return jacobian #返回编译的机器码函数，可以直接调用，速度非常快，输入关节角度，输出末端执行器在关节空间中的雅可比矩阵
 
 @jit(nopython=True, fastmath=True)
 def safety(

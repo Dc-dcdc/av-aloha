@@ -25,7 +25,7 @@
     <position class="wrist_3_joint" name="middle_wrist_3_joint" joint="middle_wrist_3_joint"/>
   </actuator>
 
-  <!-- <keyframe>
+  <keyframe>
     <key name="neutral_pose" qpos="
     0 -0.96 1.16 0 -0.3 0 0.0084 0.0084
     0 -0.96 1.16 0 -0.3 0 0.0084 0.0084
@@ -34,7 +34,6 @@
     0 -0.96 1.16 0 -0.3 0 0.0084
     0 -0.96 1.16 0 -0.3 0 0.0084
     0 -0.96 1.16 0 -0.3 0 0"
-    
     />
-  </keyframe> -->
+  </keyframe>
 </mujoco>

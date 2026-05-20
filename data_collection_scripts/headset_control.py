@@ -19,17 +19,18 @@ import os
 
 DT = REAL_DT
 
+# 实物实验，单纯使用头戴设备的头部位姿来控制机械臂的中间臂，左右臂使用遥操设备，可以采集力控数据
 class HeadsetControl():
     def __init__(
             self,
             # start_ctrl_position_threshold=0.03,
             # start_ctrl_rotation_threshold=0.2,
-            start_head_position_threshold=0.03,
-            start_head_rotation_threshold=0.2,
+            start_head_position_threshold=0.03, # 头部起始位置阈值
+            start_head_rotation_threshold=0.2, # 头部起始旋转阈值
             # ctrl_position_threshold=0.04,
             # ctrl_rotation_threshold=0.3,
-            head_position_threshold=0.05,
-            head_rotation_threshold=0.3
+            head_position_threshold=0.05, # 头部位置阈值
+            head_rotation_threshold=0.3 # 头部旋转阈值
         ):
         self.start_middle_arm_pose = None
         self.start_headset_pose = None
@@ -52,9 +53,10 @@ class HeadsetControl():
     def is_running(self):
         return self.started
 
+    # 保存当前的头戴设备和中间臂的空间坐标和偏航角作为起始位姿，并将started标志设置为True，表示已经开始执行轨迹
     def start(self, headset_data, middle_arm_pose):
         aligned_headset_pose = np.eye(4)
-        aligned_headset_pose[:3, :3] = align_rotation_to_z_axis(quat2mat(headset_data.h_quat))
+        aligned_headset_pose[:3, :3] = align_rotation_to_z_axis(quat2mat(headset_data.h_quat)) #只保留偏航角，去除俯仰角和滚转角的影响
         aligned_headset_pose[:3, 3] = headset_data.h_pos
         self.start_headset_pose = aligned_headset_pose
 
@@ -65,7 +67,9 @@ class HeadsetControl():
 
         self.started = True
 
+    # 计算出中间臂的新的位姿，并将结果保存在feedback中以便发送给头戴设备
     def run(self, headset_data, middle_arm_pose):
+        # 转换为4x4的变换矩阵，以便后续计算
         middle_arm_pose = pose2mat(middle_arm_pose[:3], wxyz_to_xyzw(middle_arm_pose[3:]))
         # left_arm_pose = pose2mat(left_arm_pose[:3], wxyz_to_xyzw(left_arm_pose[3:]))
         # right_arm_pose = pose2mat(right_arm_pose[:3], wxyz_to_xyzw(right_arm_pose[3:]))
@@ -78,7 +82,7 @@ class HeadsetControl():
             start_middle_arm_pose = self.start_middle_arm_pose
         else:
             aligned_headset_pose = np.eye(4)
-            aligned_headset_pose[:3, :3] = align_rotation_to_z_axis(headset_pose[:3, :3])
+            aligned_headset_pose[:3, :3] = align_rotation_to_z_axis(headset_pose[:3, :3]) #只保留偏航角
             aligned_headset_pose[:3, 3] = headset_pose[:3, 3]
             start_headset_pose = aligned_headset_pose
 
@@ -88,6 +92,7 @@ class HeadsetControl():
             start_middle_arm_pose = aligned_middle_arm_pose
 
         # calculate offset between current and saved headset pose
+        # 计算当前头显相对于“初始头显位姿”的增量，并将这个增量叠加到“初始中间臂位姿”上，解算出中间臂应该到达的目标期望位姿
         new_middle_arm_pose = transform_coordinates(headset_pose, start_headset_pose, start_middle_arm_pose)
         # new_left_arm_pose = transform_coordinates(left_pose, start_headset_pose, start_middle_arm_pose)
         # new_right_arm_pose = transform_coordinates(right_pose, start_headset_pose, start_middle_arm_pose)
@@ -101,6 +106,7 @@ class HeadsetControl():
         # new_right_arm_quat = xyzw_to_wxyz(new_right_arm_quat)
 
         # grippers 
+        # 夹爪数据直接使用食指触发器的值，范围从0到1，表示夹爪的开合程度，其中0表示完全张开，1表示完全闭合
         new_left_gripper = np.array([headset_data.l_index_trigger])
         new_right_gripper = np.array([headset_data.r_index_trigger])
 
@@ -167,6 +173,7 @@ class HeadsetControl():
 class HeadsetFullControl():
     def __init__(
             self,
+            # 起始位姿阈值可以稍微放宽一些，允许用户在开始控制时有一定的误差，但一旦开始控制后，位置和旋转的阈值应该更严格
             start_ctrl_position_threshold=0.06, #控制器起始位置阈值
             start_ctrl_rotation_threshold=0.4, #控制器起始旋转阈值
             start_head_position_threshold=0.03, #头部起始位置阈值
@@ -201,8 +208,8 @@ class HeadsetFullControl():
     def start(self, headset_data, middle_arm_pose):
         # 对齐头戴设备的位姿
         aligned_headset_pose = np.eye(4) # 创建一个4x4的单位矩阵，表示对齐后的头戴设备位姿
-        aligned_headset_pose[:3, :3] = align_rotation_to_z_axis(quat2mat(headset_data.h_quat)) # 将头戴设备的旋转对齐到z轴
-        aligned_headset_pose[:3, 3] = headset_data.h_pos # 将头戴设备的位置设置为对齐后的位姿的平移部分
+        aligned_headset_pose[:3, :3] = align_rotation_to_z_axis(quat2mat(headset_data.h_quat)) # 将头戴设备的旋转对齐到z轴，即只保留偏航角，去除俯仰角和滚转角的影响
+        aligned_headset_pose[:3, 3] = headset_data.h_pos # xyz空间位姿保持不变
         self.start_headset_pose = aligned_headset_pose
 
         # 对齐中间臂的位姿
@@ -215,22 +222,21 @@ class HeadsetFullControl():
 
     # 
     def run(self, headset_data, left_arm_pose, right_arm_pose, middle_arm_pose):
-        # 将输入的头戴设备数据和左右臂、中间臂的位姿转换为4x4的变换矩阵，以便后续计算
+        # 转换为4x4的变换矩阵，以便后续计算
         middle_arm_pose = pose2mat(middle_arm_pose[:3], wxyz_to_xyzw(middle_arm_pose[3:])) # 中间臂
         left_arm_pose = pose2mat(left_arm_pose[:3], wxyz_to_xyzw(left_arm_pose[3:])) # 左臂
         right_arm_pose = pose2mat(right_arm_pose[:3], wxyz_to_xyzw(right_arm_pose[3:])) # 右臂
-        
         headset_pose = pose2mat(headset_data.h_pos, headset_data.h_quat) # 头戴设备
         left_pose = pose2mat(headset_data.l_pos, headset_data.l_quat) # 左手控制器
         right_pose = pose2mat(headset_data.r_pos, headset_data.r_quat) # 右手控制器
 
-        # 如果已经开始执行轨迹，则使用保存的起始位姿，否则将当前的头戴设备位姿和中间臂位姿对齐到z轴并保存为起始位姿
+        # 如果已经开始执行轨迹，则使用保存的起始位姿
         if self.started: 
             start_headset_pose = self.start_headset_pose
             start_middle_arm_pose = self.start_middle_arm_pose
-        else:
+        else:#否则将当前状态保存为起始位姿，计算增量时就一直为0，用户可以在开始控制前调整到合适的位姿
             aligned_headset_pose = np.eye(4)
-            aligned_headset_pose[:3, :3] = align_rotation_to_z_axis(headset_pose[:3, :3])
+            aligned_headset_pose[:3, :3] = align_rotation_to_z_axis(headset_pose[:3, :3]) #只保留偏航角
             aligned_headset_pose[:3, 3] = headset_pose[:3, 3]
             start_headset_pose = aligned_headset_pose
 
@@ -240,8 +246,8 @@ class HeadsetFullControl():
             start_middle_arm_pose = aligned_middle_arm_pose
 
         # calculate offset between current and saved headset pose
-        # 根据当前的头戴设备位姿和保存的起始位姿计算出新的中间臂位姿，以及新的左右臂位姿
-        new_middle_arm_pose = transform_coordinates(headset_pose, start_headset_pose, start_middle_arm_pose)#提取头显相对于初始姿态的空间偏移量，并将其等效映射至中间臂的初始坐标系，从而解算出中间臂的当前期望位姿
+        # 基于一开始锚定的头部基准，分别计算头显、左手柄、右手柄的空间位姿变化，并分别映射给中间臂、左机械臂、右机械臂
+        new_middle_arm_pose = transform_coordinates(headset_pose, start_headset_pose, start_middle_arm_pose)
         new_left_arm_pose = transform_coordinates(left_pose, start_headset_pose, start_middle_arm_pose)
         new_right_arm_pose = transform_coordinates(right_pose, start_headset_pose, start_middle_arm_pose)
 
@@ -256,11 +262,12 @@ class HeadsetFullControl():
         new_right_arm_quat = xyzw_to_wxyz(new_right_arm_quat)
 
         # grippers 
-        # 将左右手控制器的扳机值作为夹持器的状态，拼接成一个数组
+        # 读取左右手控制器的扳机值作为夹持器的状态
         new_left_gripper = np.array([headset_data.l_index_trigger]) 
         new_right_gripper = np.array([headset_data.r_index_trigger])
 
-        # concatenate the new action
+        # concatenate the new action，
+        # 将所有的动作拼接成一个数组
         action = np.concatenate([
             new_left_arm_pos, new_left_arm_quat, new_left_gripper,
             new_right_arm_pos, new_right_arm_quat, new_right_gripper,
@@ -278,13 +285,14 @@ class HeadsetFullControl():
         unity_right_arm_pos, unity_right_arm_quat = convert_right_to_left_coordinates(*mat2pose(unity_right_arm_pose))
         unity_middle_arm_pos, unity_middle_arm_quat = convert_right_to_left_coordinates(*mat2pose(unity_middle_arm_pose))
         
-        # 根据新的中间臂位姿和左右臂位姿与环境中的位姿进行比较，判断它们是否在预设的阈值范围内，如果超出阈值范围则认为不同步，并将结果保存在feedback中以便发送给头戴设备
+        # 根据新的中间臂位姿和左右臂位姿与环境中的位姿进行比较，判断它们是否在预设的阈值范围内，
+        # 如果超出阈值范围则认为不同步，并将结果保存在feedback中以便发送给头戴设备
         headOutOfSync = not within_pose_threshold(
             middle_arm_pose[:3, 3],
             middle_arm_pose[:3, :3],
             new_middle_arm_pose[:3, 3], 
             new_middle_arm_pose[:3, :3],
-            self.head_position_threshold if self.started else self.start_head_position_threshold,
+            self.head_position_threshold if self.started else self.start_head_position_threshold, # 
             self.head_rotation_threshold if self.started else self.start_head_rotation_threshold
         )
         leftOutOfSync = not within_pose_threshold(
@@ -316,7 +324,7 @@ class HeadsetFullControl():
         feedback.middle_arm_position = unity_middle_arm_pos
         feedback.middle_arm_rotation = unity_middle_arm_quat        
 
-        return action, feedback # 返回生成的动作和反馈信息，以便在环境中执行动作并将反馈发送给头戴设备
+        return action, feedback # 返回VR设备生成的动作，并反馈mujoco中实物信息
     
     
 # def main():
