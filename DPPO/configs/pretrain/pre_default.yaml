@@ -1,0 +1,103 @@
+defaults:
+  - _self_
+  # 默认加载的环境和策略
+  - env: sim_sew_needle_3arms
+  - policy: pre_zed_diffusion
+
+hydra:
+  run:
+    dir: outputs/pretrain/train/${now:%Y-%m-%d}/${now:%H-%M-%S}_${env.task}_${hydra.runtime.choices.policy}
+    # ${hydra.runtime.choices.policy}就是对应的policy名称，如果直接写${policy}会把文件里的参数都放进去
+    # dir: src/av-aloha/DPPO/outputs/pretrain/train/${now:%Y-%m-%d}/${now:%H-%M-%S}_${env.name}_${policy.name}_${hydra.job.name}
+  job:
+    name: ${env.task}_${hydra.runtime.choices.policy}_${now:%Y-%m-%d}_${now:%H-%M-%S}
+  
+  job_logging:
+    handlers:
+      file:
+        #将日志文件写入模式改为追加 (append)
+        mode: a
+# 将 `resume` 设置为 true 以恢复之前的运行。为此，您需要确保hydra.run.dir是至少包含一个检查点的现有运行目录。
+# 注意，当恢复运行时，默认行为是使用检查点中的配置，无论恢复时训练命令提供了什么参数。。
+resume: false
+resume_path: none
+device: "cuda:0"  # cuda或cpu
+
+# 把部分计算从 float32 改成 float16，速度快 30%~100%
+use_amp: True
+# `seed` is used for training (eg: model initialization, dataset shuffling)
+# AND for the evaluation environments.
+seed: ???
+# You may provide a list of datasets here. `train.py` creates them all and concatenates them. Note: only data
+# keys common between the datasets are kept. Each dataset gets and additional transform that inserts the
+# "dataset_index" into the returned item. The index mapping is made according to the order in which the
+# datsets are provided.
+dataset_repo_id: lerobot/pusht
+video_backend: pyav # 视频解码引擎，读取视频文件转化为图像张量
+
+eval:
+  checkpoint_metric: "loss" # 筛选指标：可选 'loss' 或 'reward'
+  max_checkpoints: 15     # 最多保存loss最小的几个模型快照
+  n_episodes: 1              # 每次评估跑多少个完整的 episode
+  max_episodes_rendered: 1    # 最多保存前几个 episode 的录像视频
+  # `batch_size` specifies the number of environments to use in a gym.vector.VectorEnv.
+  batch_size: 1
+  # `use_async_envs` specifies whether to use asynchronous environments (multiprocessing).
+  use_async_envs: true
+  records_resume: true  # 是否读取top-k的快照和视频列表 即top_k_records.json
+  fps: 25               # 录制的 MP4 视频帧率
+  seed: 100            # 评估时的随机种子
+  render_camera : ['overhead_cam']                           # 评估时保存的video视角相机
+
+
+training:
+  eval_freq: 100
+  log_freq: 100           # 多少步记录一次日志，会在终端输出，并上传wandb
+  save_checkpoint: true 
+  lr_backbone: 1e-5       # 视觉网络resnet学习率
+  
+  image_transforms:
+  # These transforms are all using standard torchvision.transforms.v2
+  # You can find out how these transformations affect images here:
+  # https://pytorch.org/vision/0.18/auto_examples/transforms/plot_transforms_illustrations.html
+  # We use a custom RandomSubsetApply container to sample them.
+  # For each transform, the following parameters are available:
+  #   weight: This represents the multinomial probability (with no replacement)
+  #           used for sampling the transform. If the sum of the weights is not 1,
+  #           they will be normalized.
+  #   min_max: Lower & upper bound respectively used for sampling the transform's parameter
+  #           (following uniform distribution) when it's applied.
+    # Set this flag to `true` to enable transforms during training
+    enable: false
+    # This is the maximum number of transforms (sampled from these below) that will be applied to each frame.
+    # It's an integer in the interval [1, number of available transforms].
+    max_num_transforms: 3
+    # By default, transforms are applied in Torchvision's suggested order (shown below).
+    # Set this to True to apply them in a random order.
+    random_order: true
+    brightness:
+      weight: 1
+      min_max: [0.8, 1.2]
+    contrast:
+      weight: 1
+      min_max: [0.8, 1.2]
+    saturation:
+      weight: 1
+      min_max: [0.5, 1.5]
+    hue:
+      weight: 1
+      min_max: [-0.05, 0.05]
+    sharpness:
+      weight: 1
+      min_max: [0.8, 1.2]
+
+policy:
+  do_mask_loss_for_padding: false
+
+wandb:
+  enable: true
+  # Set to true to disable saving an artifact despite save_checkpoint == True
+  disable_artifact: true # 不保存artifact，即不上传权重模型
+  project: ${env.task}_finetune #项目名称
+  notes: ""
+  save_code: false  # 是否保存代码

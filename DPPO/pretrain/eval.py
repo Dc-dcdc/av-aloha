@@ -1,0 +1,548 @@
+import os
+# 告诉底层的 CuBLAS 使用固定的工作区配置，以保证计算的绝对确定性
+os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"
+# 🌟 终极防线：强行限制底层所有的数学库和物理引擎仅使用单线程！
+os.environ["OMP_NUM_THREADS"] = "1"
+os.environ["MKL_NUM_THREADS"] = "1"
+os.environ["OPENBLAS_NUM_THREADS"] = "1"
+os.environ["VECLIB_MAXIMUM_THREADS"] = "1"
+os.environ["NUMEXPR_NUM_THREADS"] = "1"
+import torch
+import logging
+import numpy as np
+import imageio
+import json
+import shutil
+from pathlib import Path
+from contextlib import nullcontext
+import gymnasium as gym
+import yaml
+from tqdm import tqdm
+import random
+import time
+import sys
+from types import SimpleNamespace
+from lerobot.common.policies.factory import make_policy
+from lerobot.common.utils.utils import get_safe_torch_device
+from lerobot.common.envs.utils import preprocess_observation
+import env.sim_envs
+# 确保能够导入你的环境
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+# ==========================================
+# 🌟 [新增] 自定义 Top-K 快照管理器(包含视频同步清理)
+# ==========================================
+class TopKCheckpointManager:
+    """
+    核心逻辑：
+    1. 维护一个大小为 max_keep 的列表，按 loss 从小到大排序。
+    2. 永远保留最新的 checkpoint（防止训练中断后无法续训最近的进度）。
+    3. 自动扫描并删除既不在 top_k 列表，也不是 latest 的多余权重文件夹。
+    """
+    def __init__(self, out_dir: str, max_keep: int = 5, metric: str = "loss", records_resume: bool = True):
+        self.out_dir = Path(out_dir) if out_dir else Path("outputs")
+        self.checkpoints_dir = self.out_dir / "checkpoints"  # 模型快照存放的总目录 
+        self.eval_dir = self.out_dir / "eval"  # 评估视频存放的总目录
+        self.max_keep = max_keep
+        self.metric = metric  # 记录筛选指标：'loss' 或 'reward'
+        self.top_k = []       # 数据结构: [{"step": int, "loss": float, "path": Path}]
+        self.latest_path = None
+        self.records_file = self.checkpoints_dir / "top_k_records.json"
+        self.records_resume = records_resume
+        # 支持断点续训：每次实例化时从本地读取记录，保证跨 step 调用时不丢失历史信息
+        if self.records_file.exists() and self.records_resume:
+            try:
+                with open(self.records_file, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    self.latest_path = Path(data.get("latest")) if data.get("latest") else None
+                    self.top_k = [
+                        {"step": item["step"], "loss": item["loss"], "reward": item["reward"], "path": Path(item["path"])} 
+                        for item in data.get("top_k", [])
+                    ]
+            except Exception as e:
+                logging.warning(f"⚠️ 无法读取 Top-K 记录，将重新开始统计: {e}")
+
+    def update(self, step: int, loss: float, ckpt_path: Path,reward: float = -float('inf')):
+        self.latest_path = ckpt_path
+        # 防重入：如果当前路径已经在记录里了，先剔除旧的
+        self.top_k = [item for item in self.top_k if item["path"].name != ckpt_path.name]
+        # 将新的 checkpoint 加入 top-k 候选并排序
+        self.top_k.append({"step": step, "loss": loss, "reward": reward, "path": ckpt_path})
+        
+        # 🌟 4. 根据配置进行排序
+        if self.metric == "reward":
+            # Reward 越大越好，使用 reverse=True
+            self.top_k.sort(key=lambda x: x["reward"], reverse=True)
+        else:
+            # Loss 越小越好
+            self.top_k.sort(key=lambda x: x["loss"])
+        
+        # 如果超出了保留数量，把表现最差的剔除（仅仅是从内存列表中剔除）
+        if len(self.top_k) > self.max_keep:
+            self.top_k.pop(-1) 
+            logging.info(f"🛡️ 候选列表完成 ({len(self.top_k)}/{self.max_keep})，已根据 {self.metric} 剔除表现最差的模型。")
+        else:
+            logging.info(f"🛡️ 候选列表还在收集中 ({len(self.top_k)}/{self.max_keep})，暂不执行硬盘清理。")
+        if self.checkpoints_dir.exists():
+            # 提取出合法的【文件夹名称】集合
+            valid_names = {item["path"].name for item in self.top_k}
+            if self.latest_path:
+                valid_names.add(self.latest_path.name) # 最新模型必须保存
+
+            for d in self.checkpoints_dir.iterdir():
+                if d.is_dir() and d.name.split('_')[0].isdigit():
+                    if d.name not in valid_names:
+                        shutil.rmtree(d, ignore_errors=True)
+                        logging.info(f"🗑️ 已清理未进入 Top-{self.max_keep} 的模型快照: {d.name}")
+            
+        
+        # 2. 同步清理物理硬盘上的无用评估视频文件夹
+        if self.eval_dir.exists():
+            # 基于 valid_names 生成合法的视频文件夹名称
+            valid_video_folder_names = {f"videos_{name}" for name in valid_names}
+            
+            for v_dir in self.eval_dir.iterdir():
+                # 只清理以 "videos_" 开头，且后缀是数字（或带 loss 的数字）的文件夹
+                if v_dir.is_dir() and v_dir.name.startswith("videos_"):
+                    # 提取 videos_ 后面的部分判断是不是我们的目标文件夹
+                    suffix = v_dir.name.replace("videos_", "")
+                    if suffix.split('_')[0].isdigit():
+                        if v_dir.name not in valid_video_folder_names:
+                            shutil.rmtree(v_dir, ignore_errors=True)
+                            logging.info(f"🗑️ 已同步清理失效模型的评估视频: {v_dir.name}")
+                            
+        self._save_records()
+
+    def _save_records(self):
+        self.checkpoints_dir.mkdir(parents=True, exist_ok=True)
+        with open(self.records_file, "w", encoding="utf-8") as f:
+            json.dump({
+                "latest": str(self.latest_path) if self.latest_path else None,
+                "top_k": [{"step": i["step"], "loss": i["loss"], "reward": i["reward"], "path": str(i["path"])} for i in self.top_k]
+            }, f, indent=4, ensure_ascii=False)
+
+def custom_eval_policy(env, policy, cfg_eval, videos_dir, device):
+    """
+    完全自主实现的评估代码。没有任何黑盒。
+    接收标准 Gym 环境，处理图像归一化，跑策略推理，保存视频。
+    """
+    policy.eval() # 必须开启评估模式
+    successes = []
+    rewards = []
+
+    # 用来动态记录实际保存的视频路径
+    saved_video_paths = []
+    
+    videos_dir = Path(videos_dir)
+    videos_dir.mkdir(parents=True, exist_ok=True)
+    
+    # 从配置中动态读取参数，提供后备默认值防崩溃
+    n_episodes = getattr(cfg_eval, "n_episodes", 10)
+    max_rendered = getattr(cfg_eval, "max_episodes_rendered", 4)
+    fps = getattr(cfg_eval, "fps", 25)
+    max_steps = getattr(cfg_eval, "max_steps", 300)
+    raw_camera = getattr(cfg_eval, "render_camera", 'overhead_cam')
+    render_camera = raw_camera
+    # 从配置中提取基础种子，默认为 1000
+    base_seed = getattr(cfg_eval, "seed", 1000)
+    # 计算所有评估回合推理的总耗时
+    global_real_inference_times = []
+    # 动作执行循环
+    for ep in tqdm(range(n_episodes), leave=False):
+        # 计算当前回合的专属种子，并传给环境
+        ep_seed = base_seed + ep
+        obs, _ = env.reset(seed=ep_seed)
+        # 🌟 核心修复 2：每个回合开始前，强制重置框架的随机状态
+        # 这样即使上一回合的执行步数有波动，也不会污染本回合的 Diffusion 采样噪声
+        torch.manual_seed(ep_seed)
+        np.random.seed(ep_seed)
+        done = False
+        frames = []
+        ep_reward = 0
+        # LeRobot/DPPO 的 Policy 内置了 action chunking 队列
+        policy.reset() # 清空模型的动作缓冲历史
+
+        # 🌟 1. 每回合新建一个列表，静默记录本回合的所有耗时
+        ep_inference_times = []
+        for step in range(max_steps):
+            # 1. 如果还在需要渲染的额度内，才调用渲染 (提升非渲染 episode 的评估速度)
+            if ep < max_rendered:
+                frames.append(env.unwrapped.render(render_camera)) # gym创建需要加上 .unwrapped
+                # frames.append(env.render(render_camera))  #直接创建环境不需要
+
+            def prepare_obs(obj):
+                """递归字典，拷贝连续内存，并强行在最前面增加一个 Batch 维度"""
+                if isinstance(obj, dict):
+                    return {k: prepare_obs(v) for k, v in obj.items()}
+                elif hasattr(obj, "copy"):  # 如果是 numpy 数组
+                    return np.expand_dims(obj.copy(), axis=0).copy() # [H, W, C] -> [1, H, W, C]
+                return obj
+            
+            # 在送入官方预处理之前，强制清洗内存并扩维
+            obs = prepare_obs(obs)
+
+            # [b, H, W, C] -> [b, C, H, W] ,并/ 255.0
+            obs = preprocess_observation(obs)
+
+            # 2. 键值过滤与设备转移：只保留模型配置中真正需要的输入特征，推入 GPU
+            obs = {
+                k: v.to(device)
+                for k, v in obs.items()
+                if k in policy.config.input_shapes  # 🌟 保留这层保护，防止多余状态引发报错
+            }
+            # ==========================================
+            # ⏱️ 开始计时：使用高精度的 perf_counter
+            # ==========================================
+            start_time = time.perf_counter()
+
+            # 3. 推理获取动作
+            with torch.no_grad():
+                # 使用lerobot自带的推理函数
+                action = policy.select_action(obs) # 这里每次取出一个动作，推理依旧一次生成8个动作，只是一个个往外取
+            # 4. 把模型输出的 Tensor 动作转回 Numpy (包含在计时内)
+            action_np = action.squeeze(0).cpu().numpy()
+
+            # ⏱️ 结束计时
+            inference_time_ms = (time.perf_counter() - start_time) * 1000 # 转换为毫秒 (ms)
+            ep_inference_times.append(inference_time_ms)
+            # print(f"👉 Step {step} 推理耗时: {inference_time_ms:.2f} ms")
+            # ==========================================
+            try:
+                # 5. 与环境交互
+                obs, reward, terminated, truncated, info = env.step(action_np)
+                ep_reward += float(reward)
+
+                done = terminated or truncated
+            except Exception as e:
+                # 🌟 核心拦截器：无论物理引擎报什么错，全部强行吃掉！
+                logging.error(f"💥 物理引擎崩溃 (Step {step}): {e}")
+                logging.error("判定本回合评估失败，直接结束当前回合，继续训练...")
+                
+                done = True
+                ep_reward = -1000.0          # 发生物理崩溃，不给奖励
+                info = {"is_success": False} # 标记为失败
+            if done:
+                break
+        # 记录指标
+        successes.append(info.get("is_success", False))
+        rewards.append(ep_reward)
+
+        # 6. 根据配置的帧率和最大渲染数量保存视频
+        if ep < max_rendered and len(frames) > 0:
+            status = "Success" if successes[ep] else "Fail"
+            # 格式：012500_reward=150.5_cam_overhead_ep_0.mp4
+            video_name = f"{render_camera[0]}_ep_{ep}_reward={ep_reward:.1f}_{status}.mp4"
+            video_path = videos_dir / video_name
+            imageio.mimsave(str(video_path), frames, fps=fps)
+            logging.info(f"🎥 保存视频: {video_path.name}")
+            
+            saved_video_paths.append(str(video_path))
+
+        # 记录每回合的推理时间
+        if len(ep_inference_times) > 0:
+            
+            # 过滤出“真实推理”步骤（比如耗时超过 5ms 的肯定是在跑网络，排除了 0.1ms 的出队操作）
+            real_inferences = [t for t in ep_inference_times if t > 5.0]
+            
+            if real_inferences:
+                global_real_inference_times.extend(real_inferences) # 加入全局统计
+
+    # 结算全局指标：剔除前几次全局预热     
+    if len(global_real_inference_times) > 0:
+
+        # 全局剔除前 3 次真正的网络推理作为 Warm-up
+        warmup_steps = 3
+        # 尝试获取稳定状态的数据
+        if len(global_real_inference_times) > warmup_steps:
+            stable_times = global_real_inference_times[warmup_steps:]
+        else:
+            # 数据太少，不够剔除，只能全量使用
+            stable_times = global_real_inference_times
+            
+        # 安全地计算最大值和均值
+        max_time = max(stable_times)
+
+        avg_real_time = sum(stable_times) / len(stable_times)
+        # logging.info(f"⏱️ [总计{n_episodes}回合] 真实推理触发: {len(global_real_inference_times)} 次 | 峰值耗时: {max_time:.2f} ms | 平均耗时: {avg_real_time:.2f} ms")
+    else:
+        avg_real_time = 0.0  # 提供默认值防报错
+        max_time = 0.0
+    policy.train() # 恢复训练模式
+    
+    # 计算实际应该返回的视频列表长度
+    actual_rendered = min(max_rendered, n_episodes)
+    return {
+        "aggregated": {
+            "success_rate": float(np.mean(successes)),
+            "average_reward": float(np.mean(rewards)),
+            "avg_inference_ms": float(avg_real_time),
+            "max_inference_ms": float(max_time)
+        },
+        "video_paths": saved_video_paths
+    }
+
+
+def evaluate_and_checkpoint_if_needed(
+    step, policy, optimizer, lr_scheduler, logger, cfg, device, out_dir, eval_env=None, train_loss=None, manager=None
+):
+    """
+    主评估与保存入口
+    """
+    _num_digits = max(6, len(str(cfg.training.offline_steps))) 
+    step_identifier = f"{step:0{_num_digits}d}" 
+
+    if train_loss is not None:
+        base_identifier = f"{step_identifier}_loss={train_loss:.4f}"
+    else:
+        base_identifier = step_identifier
+    
+    # 1. 评估逻辑 (优先读取 cfg.eval.eval_freq)
+    eval_freq = getattr(cfg.training, "eval_freq", 0)
+    is_last_step = (step == cfg.training.offline_steps - 1)
+    # 初始化本步的 reward 为极小值
+    sr = -float('inf')
+    if (eval_freq > 0 and step > 0 and step % eval_freq == 0) or is_last_step:
+        logging.info(f"📊 开始自主评估流程, 当前 Step: {step}")
+        if eval_env is not None:
+            temp_video_dir = Path(out_dir) / "eval" / f"videos_{base_identifier}"
+            
+            with torch.autocast(device_type=device.type) if cfg.use_amp else nullcontext():
+                # 传入完整的 cfg.eval 节点
+                eval_info = custom_eval_policy(
+                    env=eval_env,
+                    policy=policy,
+                    cfg_eval=cfg.eval, 
+                    videos_dir=temp_video_dir,
+                    device=device
+                )
+            
+            sr = eval_info["aggregated"]["success_rate"]
+            ar = eval_info["aggregated"]["average_reward"]
+            avg_infer = eval_info["aggregated"]["avg_inference_ms"]
+            max_infer = eval_info["aggregated"]["max_inference_ms"]
+            logging.info(f"✅ 评估完毕! 成功率: {sr*100:.1f}%, 平均奖励: {ar:.2f}, 推理平均耗时: {avg_infer:.2f} ms， 推理最大耗时: {max_infer:.2f} ms")
+
+            if getattr(cfg, "wandb", {}).get("enable", False) and len(eval_info["video_paths"]) > 0:
+                logger.log_video(eval_info["video_paths"][0], step, mode="eval") # 只上传第一个视频到 wandb
+
+            final_identifier = f"{base_identifier}_sr={sr*100:.1f}_ar={ar:.2f}"
+
+    save_freq = getattr(cfg.training, "save_freq", 10000)
+    if getattr(cfg.training, "save_checkpoint", False) and (step > 0 and step % save_freq == 0 or is_last_step):
+        # 保存模型权重
+        logging.info(f"💾 保存模型快照... Step: {step}")
+        logger.save_checkpoint(step, policy, optimizer, lr_scheduler, identifier=final_identifier)
+
+        # 归档评估视频
+        ckpt_path = Path(out_dir) / "checkpoints" / final_identifier
+        if ckpt_path.exists() and temp_video_dir is not None and temp_video_dir.exists():
+            target_video_path = ckpt_path / "eval_videos"
+            # 使用 shutil.move 将整个临时文件夹移动并重命名为 eval_videos
+            shutil.move(str(temp_video_dir), str(target_video_path))
+            logging.info(f"📦 视频已归档至: {final_identifier}/eval_videos/")
+
+        # 触发 Top-K 筛选与清理
+        if train_loss is not None:
+            if ckpt_path.exists():
+                manager.update(step, train_loss, ckpt_path, reward=ar)
+        else:
+            logging.warning("⚠️ 警告: 未传入 train_loss，跳过 Top-K 模型清理逻辑，将保留所有权重。")
+
+
+def seed_everything(seed: int):
+    """Set seed for absolute reproducibility."""
+    
+    # 1. 锁死 Python 字典和集合的哈希种子 
+    # (防止字典遍历顺序在不同运行中发生变化，导致 Batch 数据错位)
+    os.environ['PYTHONHASHSEED'] = str(seed)
+
+    # 2. 锁死 Python 内置随机库
+    random.seed(seed)
+
+    # 3. 锁死 Numpy
+    np.random.seed(seed)
+
+    # 4. 锁死 PyTorch (CPU & 所有 GPU)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed(seed)
+        torch.cuda.manual_seed_all(seed) # 针对多卡环境
+
+    # 5. 锁死 CuDNN 底层算法 (极其关键)
+    # 关闭自动调优，强行使用确定性卷积算法
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+
+    # 6. 强制 PyTorch 使用确定性算子
+    # 如果底层调用了非确定性算子，会强制回退到确定性实现，或者抛出警告
+    torch.use_deterministic_algorithms(True, warn_only=True)
+
+def main(eval_cfg):
+    ckpt_path = eval_cfg.ckpt_path
+
+    seed_everything(eval_cfg.seed)
+    if not os.path.exists(ckpt_path):
+        raise FileNotFoundError(f"❌ 找不到权重路径: {ckpt_path}\n请检查路径是否正确。")
+    # ==========================================
+    # 🌟 1.自动探测 LeRobot 的 pretrained_model 子文件夹
+    # ==========================================
+    hf_model_dir = os.path.join(ckpt_path, "pretrained_model")
+    if os.path.exists(hf_model_dir):
+        print(f"🔍 检测到 LeRobot 标准快照结构，将自动读取子目录: pretrained_model")
+        load_dir = hf_model_dir
+    else:
+        load_dir = ckpt_path # 兼容其他保存格式
+
+    # 准备设备 (传入 "cuda" 防止新版本报错)
+    device = get_safe_torch_device("cuda")
+    print(f"🚀 初始化评估程序... 使用设备: {device}")
+
+    
+    # ==========================================
+    # 🌟 2.实例化 Policy 并加载权重
+    # ==========================================
+    print(f"💾 正在从目录重建网络并加载权重: {load_dir}")
+    try:
+        
+        from pathlib import Path
+        from lerobot.common.utils.utils import init_hydra_config
+
+        # 1. 寻找 config.yaml 路径
+        config_yaml_path = Path(load_dir) / "config.yaml"
+        if not config_yaml_path.exists():
+            config_yaml_path = Path(load_dir).parent / "config.yaml"
+            
+        if not config_yaml_path.exists():
+            raise FileNotFoundError(f"找不到 config.yaml，无法初始化 hydra_cfg！")
+
+        # 2. 根据 yaml 文件初始化 hydra_cfg 对象
+        hydra_cfg = init_hydra_config(str(config_yaml_path))
+
+        # 3. 🌟 核心：直接使用 make_policy，让框架接管底层张量与 EMA 加载
+        policy = make_policy(
+            hydra_cfg=hydra_cfg, 
+            pretrained_policy_name_or_path=str(load_dir)
+        )
+        
+        print("✅ 成功使用 make_policy 加载策略！底层 Normalizer 与平滑权重已自动生效。")
+        # 手动推入 GPU
+        policy.to(device)
+    except Exception as e:
+        raise RuntimeError(f"❌ 权重加载失败！详细报错: {e}")
+    
+    # ==========================================
+    # 🌟 3.读取快照中的配置，使环境和训练时的对齐
+    # ==========================================
+    all_obs_keys = policy.config.input_shapes.keys()
+    ref_cams = [k.replace("observation.images.", "") for k in all_obs_keys if "observation.images." in k]
+    if not ref_cams:
+        raise ValueError(f"❌ 严重冲突：模型中未找到相机相关参数。请检查模型输入是否正确。")
+    
+    obs_cameras = list(dict.fromkeys(ref_cams + eval_cfg.render_camera))
+    # 动态读取环境元数据 (直接从 load_dir 读取)
+    
+    config_yaml_path = Path(load_dir) / "config.yaml"
+
+    if config_yaml_path.exists():
+        with open(config_yaml_path, "r") as f:
+            full_cfg = yaml.safe_load(f)
+            
+            # 安全地从 YAML 的字典树中提取 env.name 和 env.task
+            env_cfg = full_cfg.get("env", {})
+            env_name = env_cfg.get("name", getattr(env_cfg, "name", "guided_vision"))
+            env_task = env_cfg.get("task", getattr(env_cfg, "task", "SewNeedle-3Arms-v0"))
+            logging.info(f"📦 成功从预训练文件夹读取完整环境配置: {env_name}/{env_task}")
+    else:
+        # 极限防呆后备
+        env_name = getattr(eval_cfg, "name", "guided_vision")
+        env_task = getattr(eval_cfg, "task", "SewNeedle-3Arms-v0")
+        logging.warning(f"⚠️ 未找到 config.yaml，使用本地设定的后备环境: {env_name}/{env_task}")
+
+    # 拼接 Gym ID
+    env_id = f"{env_name}/{env_task}"
+    logging.info(f"正在通过 Gym 注册表构建环境: {env_id}")
+    # 使用 gym.make 创建环境，并通过 kwargs 强行覆盖你需要的相机
+    eval_env = gym.make(
+        id=env_id, 
+        cameras=obs_cameras  # 👈 这里的传参会直接覆盖 __init__.py 里的默认套餐！
+    )
+    logging.info(f"✅ 环境加载成功！最终挂载的相机: {obs_cameras}")
+
+    # ==========================================
+    # 🌟 4.设置视频输出目录 (默认在 000000 文件夹同级新建 eval_videos 文件夹)
+    # ==========================================
+    videos_dir = os.path.join(ckpt_path, "extra_eval_videos")
+    print(f"🎬 开始测试! 录像将保存在: {videos_dir}")
+
+    # ==========================================
+    # 🌟 5.调用评估函数
+    # ==========================================
+    with torch.autocast(device_type=device.type) if getattr(eval_cfg, "use_amp", False) else nullcontext():
+        eval_info = custom_eval_policy(
+            env=eval_env,
+            policy=policy,
+            cfg_eval=eval_cfg,     
+            videos_dir=videos_dir,
+            device=device
+        )
+
+    # ==========================================
+    # 🌟 6.整理指标，重命名文件夹归档视频
+    # ==========================================
+    import shutil
+    sr = eval_info["aggregated"]["success_rate"]
+    ar = eval_info["aggregated"]["average_reward"]
+    avg_infer = eval_info["aggregated"]["avg_inference_ms"]
+    max_infer = eval_info["aggregated"]["max_inference_ms"]
+    # 生成直观的文件夹名称 (例如: eval_seed100_sr85.0_ar150.5)
+    new_folder_name = f"eval_seed={eval_cfg.seed}_ep={eval_cfg.n_episodes}_sr={sr*100:.1f}_ar={ar:.2f}"
+    new_videos_dir = os.path.join(videos_dir, new_folder_name)
+    os.makedirs(new_videos_dir, exist_ok=True)
+    
+    # 将刚刚生成的视频全部移动到新文件夹中
+    moved_count = 0
+    for video_path in eval_info["video_paths"]:
+        if os.path.exists(video_path):
+            file_name = os.path.basename(video_path)
+            shutil.move(video_path, os.path.join(new_videos_dir, file_name))
+            moved_count += 1
+
+
+    # ==========================================
+    # 🌟 7.打印最终结果
+    # ==========================================
+    print("\n" + "="*50)
+    print(f"🎉 独立评估完成！")
+    print(f"🏆 成功率 (Success Rate): {sr*100:.1f}%")
+    print(f"💰 平均奖励 (Average Reward): {ar:.2f}")
+    print(f"🚀 平均推理时间 (Average Inference Time): {avg_infer:.2f} ms")
+    print(f"🚀 最大推理时间 (Max Inference Time): {max_infer:.2f} ms")
+    print("="*50)
+
+# =========================================================================
+# 🌟 独立评估测试入口，推荐使用lerobot保存的快照格式，只需要给路径，环境配置会自动对齐
+# =========================================================================
+if __name__ == "__main__":
+
+
+    # ==========================================
+    # 🎯 核心配置区：在这里自由修改你的评估参数！
+    # ==========================================
+    eval_cfg = SimpleNamespace(
+        seed=100,
+        # 📂 模型路径设置 (直接指向 0000600_loss=0.1540 文件夹即可，代码会自动寻找内部结构)
+        ckpt_path="outputs/finetune/train/2026-05-20/11-39-22_SewNeedle-3Arms-v0_ft_zed_wrist_diffusion/checkpoints/000002_sr=0.60_reward=424.36_Ploss=0.1290_Vloss=4.1540",
+        # ⚙️ 评估参数设置
+        n_episodes=100,             # 评估多少个任务                 
+        max_episodes_rendered=10,  # 保存多少个视频 
+        fps=25,                   # 视频帧率，和环境控制频率对齐
+        max_steps=300,            # 每个任务的最大步数
+        
+        # 📷 相机设置
+        # ['zed_cam_left', 'zed_cam_right', 'overhead_cam', 'worms_eye_cam' , 'wrist_cam_left', 'wrist_cam_right'],
+        render_camera=['overhead_cam'],         # 保存video的相机视角    
+        # ⚡ 混合精度设置 (推荐在评估时设为 False 以保证确定性)
+        use_amp=False,          
+    )
+    # ==========================================
+    # 启动
+    main(eval_cfg=eval_cfg)
